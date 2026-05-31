@@ -95,9 +95,43 @@ vi.mock('./lib/agentApi', () => ({
     }
   }),
 }))
+vi.mock('./lib/workbench', () => ({
+  callWorkbenchPromptPlanApi: vi.fn(async () => ({
+    analysis: '工作台分析',
+    artifactMarkdown: 'isArtifact=true',
+    selfReviewScore: 90,
+    prompts: [
+      { title: '图1', purpose: '首图', prompt: 'prompt 1', inputImageIndexes: [] },
+      { title: '图2', purpose: '痛点', prompt: 'prompt 2', inputImageIndexes: [] },
+      { title: '图3', purpose: '差异化', prompt: 'prompt 3', inputImageIndexes: [] },
+      { title: '图4', purpose: '场景', prompt: 'prompt 4', inputImageIndexes: [] },
+      { title: '图5', purpose: 'CTA', prompt: 'prompt 5', inputImageIndexes: [] },
+      { title: '图6', purpose: '额外', prompt: 'prompt 6', inputImageIndexes: [] },
+    ],
+  })),
+  callWorkbenchSellingPointApi: vi.fn(async () => ({
+    missingRequired: [],
+    missingRecommended: [],
+    summary: '必卖理由',
+    sellingPoints: [
+      {
+        targetAudience: '人群',
+        painPoint: '痛点',
+        solution: '方案',
+        benefitTranslation: '利益',
+        trustEvidence: '证据',
+        priority: '★★★★★',
+        applicableModule: '图1',
+        complianceCheck: '合规',
+      },
+    ],
+    complianceNotes: [],
+  })),
+}))
 import { clearAgentConversations, clearImages, getAllAgentConversations, getAllTasks, putAgentConversation, putImage, putTask as putDbTask } from './lib/db'
+import { callImageApi } from './lib/api'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
-import { cleanStaleAgentInputDrafts, deleteAgentRoundFromConversation, editOutputs, getActiveAgentRounds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, markInterruptedOpenAIRunningTasks, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, reuseConfig, submitAgentMessage, submitTask, useStore } from './store'
+import { cleanStaleAgentInputDrafts, deleteAgentRoundFromConversation, editOutputs, getActiveAgentRounds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, markInterruptedOpenAIRunningTasks, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, reuseConfig, submitAgentMessage, submitTask, submitWorkbenchEcommerceImageSet, useStore } from './store'
 
 const imageA = { id: 'image-a', dataUrl: 'data:image/png;base64,a' }
 const imageB = { id: 'image-b', dataUrl: 'data:image/png;base64,b' }
@@ -783,6 +817,92 @@ describe('data import', () => {
     expect(serializedPersisted).not.toContain('imported-legacy-base64')
   })
 
+})
+
+describe('workbench ecommerce image set submission', () => {
+  beforeEach(() => {
+    vi.mocked(callImageApi).mockClear()
+    vi.mocked(callImageApi).mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      return {
+        images: ['data:image/png;base64,workbench-output'],
+        actualParams: {},
+        actualParamsList: [],
+        revisedPrompts: [],
+      }
+    })
+    const responsesProfile = createDefaultOpenAIProfile({
+      id: 'workbench-responses',
+      apiKey: 'responses-key',
+      apiMode: 'responses',
+      model: DEFAULT_RESPONSES_MODEL,
+    })
+    const imagesProfile = createDefaultOpenAIProfile({
+      id: 'workbench-images',
+      apiKey: 'images-key',
+      apiMode: 'images',
+    })
+    useStore.setState({
+      settings: normalizeSettings({
+        ...DEFAULT_SETTINGS,
+        profiles: [responsesProfile, imagesProfile],
+        activeProfileId: imagesProfile.id,
+        workbenchResponsesProfileId: responsesProfile.id,
+        workbenchImagesProfileId: imagesProfile.id,
+      }),
+      params: { ...DEFAULT_PARAMS },
+      tasks: [],
+      showSettings: false,
+      toast: null,
+      showToast: vi.fn(),
+    })
+  })
+
+  it('creates at most five workbench gallery tasks and starts them concurrently', async () => {
+    const result = await submitWorkbenchEcommerceImageSet({
+      brief: {
+        heroCopyDraft: '主图文案',
+        productType: '普通食品',
+        brandName: '品牌',
+        companyName: '公司全称',
+        skuPricing: 'SKU 39元',
+        audienceAnalysis: '',
+        competitorResearch: '',
+      },
+      productImages: [],
+      sellingPointPlan: {
+        missingRequired: [],
+        missingRecommended: [],
+        summary: '确认理由',
+        sellingPoints: [
+          {
+            targetAudience: '人群',
+            painPoint: '痛点',
+            solution: '方案',
+            benefitTranslation: '利益',
+            trustEvidence: '证据',
+            priority: '★★★★★',
+            applicableModule: '图1',
+            complianceCheck: '合规',
+          },
+        ],
+        complianceNotes: [],
+      },
+    })
+
+    expect(result?.taskIds).toHaveLength(5)
+    expect(useStore.getState().tasks).toHaveLength(5)
+    expect(useStore.getState().tasks.map((task) => task.workbenchPromptTitle)).toEqual(['图1', '图2', '图3', '图4', '图5'])
+
+    await vi.waitFor(() => {
+      expect(vi.mocked(callImageApi)).toHaveBeenCalledTimes(5)
+    })
+    expect(useStore.getState().tasks.every((task) => task.status === 'running')).toBe(true)
+
+    await vi.waitFor(() => {
+      expect(useStore.getState().tasks.every((task) => task.status === 'done')).toBe(true)
+    })
+  })
 })
 
 describe('agent draft lifecycle', () => {

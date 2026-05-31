@@ -477,6 +477,14 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     ? record.activeProfileId
     : profiles[0].id
   const active = profiles.find((p) => p.id === activeProfileId) ?? profiles[0]
+  const matchingResponsesProfile = profiles.find((p) => p.provider === 'openai' && p.apiMode === 'responses') ?? profiles.find((p) => p.apiMode === 'responses')
+  const matchingImagesProfile = profiles.find((p) => p.apiMode === 'images')
+  const workbenchResponsesProfileId = typeof record.workbenchResponsesProfileId === 'string' && profiles.some((p) => p.id === record.workbenchResponsesProfileId && p.provider === 'openai' && p.apiMode === 'responses')
+    ? record.workbenchResponsesProfileId
+    : matchingResponsesProfile?.id ?? null
+  const workbenchImagesProfileId = typeof record.workbenchImagesProfileId === 'string' && profiles.some((p) => p.id === record.workbenchImagesProfileId && p.apiMode === 'images')
+    ? record.workbenchImagesProfileId
+    : matchingImagesProfile?.id ?? null
 
   return {
     baseUrl: active.baseUrl,
@@ -499,9 +507,87 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     agentScrollToBottomAfterSubmit: typeof record.agentScrollToBottomAfterSubmit === 'boolean' ? record.agentScrollToBottomAfterSubmit : true,
     agentMaxToolRounds: normalizeAgentMaxToolRounds(record.agentMaxToolRounds),
     agentWebSearch: typeof record.agentWebSearch === 'boolean' ? record.agentWebSearch : false,
+    workbenchResponsesProfileId,
+    workbenchImagesProfileId,
     profiles,
     activeProfileId,
   }
+}
+
+export function getApiProfileById(settings: Partial<AppSettings> | unknown, profileId: string | null | undefined): ApiProfile | null {
+  if (!profileId) return null
+  const normalized = normalizeSettings(settings)
+  return normalized.profiles.find((profile) => profile.id === profileId) ?? null
+}
+
+export function getWorkbenchResponsesProfile(settings: Partial<AppSettings> | unknown): ApiProfile | null {
+  const normalized = normalizeSettings(settings)
+  return getApiProfileById(normalized, normalized.workbenchResponsesProfileId)
+}
+
+export function getWorkbenchImagesProfile(settings: Partial<AppSettings> | unknown): ApiProfile | null {
+  const normalized = normalizeSettings(settings)
+  return getApiProfileById(normalized, normalized.workbenchImagesProfileId)
+}
+
+function createApiProfileId(prefix: string) {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
+}
+
+export function ensureWorkbenchApiProfiles(
+  settings: Partial<AppSettings> | unknown,
+  idFactory: (prefix: string) => string = createApiProfileId,
+): AppSettings {
+  const normalized = normalizeSettings(settings)
+  const profiles = [...normalized.profiles]
+  const sourceProfile = profiles.find((profile) => profile.id === normalized.activeProfileId && profile.provider === 'openai')
+    ?? profiles.find((profile) => profile.provider === 'openai')
+    ?? createDefaultOpenAIProfile()
+
+  let responsesProfile = profiles.find((profile) => profile.id === normalized.workbenchResponsesProfileId && profile.provider === 'openai' && profile.apiMode === 'responses')
+    ?? profiles.find((profile) => profile.provider === 'openai' && profile.apiMode === 'responses')
+  if (!responsesProfile) {
+    responsesProfile = createDefaultOpenAIProfile({
+      id: idFactory('openai-responses'),
+      name: '工作台对话',
+      baseUrl: sourceProfile.baseUrl,
+      apiKey: sourceProfile.apiKey,
+      model: DEFAULT_RESPONSES_MODEL,
+      timeout: sourceProfile.timeout,
+      apiMode: 'responses',
+      apiProxy: sourceProfile.apiProxy,
+      streamImages: false,
+      streamPartialImages: sourceProfile.streamPartialImages,
+    })
+    profiles.push(responsesProfile)
+  }
+
+  let imagesProfile = profiles.find((profile) => profile.id === normalized.workbenchImagesProfileId && profile.apiMode === 'images')
+    ?? profiles.find((profile) => profile.provider === 'openai' && profile.apiMode === 'images')
+    ?? profiles.find((profile) => profile.apiMode === 'images')
+  if (!imagesProfile) {
+    imagesProfile = createDefaultOpenAIProfile({
+      id: idFactory('openai-images'),
+      name: '工作台生图',
+      baseUrl: sourceProfile.baseUrl,
+      apiKey: sourceProfile.apiKey,
+      model: DEFAULT_IMAGES_MODEL,
+      timeout: sourceProfile.timeout,
+      apiMode: 'images',
+      apiProxy: sourceProfile.apiProxy,
+      streamImages: true,
+      streamPartialImages: sourceProfile.streamPartialImages,
+    })
+    profiles.push(imagesProfile)
+  }
+
+  return normalizeSettings({
+    ...normalized,
+    profiles,
+    activeProfileId: responsesProfile.id,
+    workbenchResponsesProfileId: responsesProfile.id,
+    workbenchImagesProfileId: imagesProfile.id,
+  })
 }
 
 export function getCustomProviderDefinition(settings: Partial<AppSettings> | unknown, provider: ApiProvider): CustomProviderDefinition | null {
@@ -785,4 +871,6 @@ export const DEFAULT_SETTINGS: AppSettings = normalizeSettings({
   agentScrollToBottomAfterSubmit: true,
   agentMaxToolRounds: DEFAULT_AGENT_MAX_TOOL_ROUNDS,
   agentWebSearch: false,
+  workbenchResponsesProfileId: null,
+  workbenchImagesProfileId: null,
 })

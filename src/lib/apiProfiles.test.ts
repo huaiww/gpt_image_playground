@@ -4,9 +4,11 @@ import {
   DEFAULT_FAL_MODEL,
   DEFAULT_IMAGES_MODEL,
   DEFAULT_OPENAI_PROFILE_ID,
+  DEFAULT_RESPONSES_MODEL,
   DEFAULT_SETTINGS,
   createDefaultOpenAIProfile,
   createDefaultFalProfile,
+  ensureWorkbenchApiProfiles,
   findEquivalentApiProfile,
   importCustomProviderDefinitionFromJson,
   importCustomProviderSettingsFromJson,
@@ -586,6 +588,86 @@ describe('custom providers', () => {
     expect(DEFAULT_SETTINGS.agentScrollToBottomAfterSubmit).toBe(true)
     expect(normalizeSettings({}).agentScrollToBottomAfterSubmit).toBe(true)
     expect(normalizeSettings({ agentScrollToBottomAfterSubmit: false }).agentScrollToBottomAfterSubmit).toBe(false)
+  })
+
+  it('keeps separate workbench profiles for Responses analysis and Images generation', () => {
+    const settings = normalizeSettings({
+      profiles: [
+        createDefaultOpenAIProfile({ id: 'images-profile', apiMode: 'images', model: 'gpt-image-2' }),
+        createDefaultOpenAIProfile({ id: 'responses-profile', apiMode: 'responses', model: 'gpt-5.5' }),
+      ],
+      activeProfileId: 'images-profile',
+      workbenchResponsesProfileId: 'responses-profile',
+      workbenchImagesProfileId: 'images-profile',
+    })
+
+    expect(settings.workbenchResponsesProfileId).toBe('responses-profile')
+    expect(settings.workbenchImagesProfileId).toBe('images-profile')
+  })
+
+  it('falls back workbench profile ids to matching API modes', () => {
+    const settings = normalizeSettings({
+      profiles: [
+        createDefaultOpenAIProfile({ id: 'images-profile', apiMode: 'images' }),
+        createDefaultOpenAIProfile({ id: 'responses-profile', apiMode: 'responses' }),
+      ],
+      activeProfileId: 'images-profile',
+      workbenchResponsesProfileId: 'missing-responses',
+      workbenchImagesProfileId: 'missing-images',
+    })
+
+    expect(settings.workbenchResponsesProfileId).toBe('responses-profile')
+    expect(settings.workbenchImagesProfileId).toBe('images-profile')
+  })
+
+  it('does not select a Responses profile as the workbench Images profile', () => {
+    const settings = normalizeSettings({
+      profiles: [
+        createDefaultOpenAIProfile({ id: 'responses-profile', apiMode: 'responses' }),
+      ],
+      activeProfileId: 'responses-profile',
+    })
+
+    expect(settings.workbenchResponsesProfileId).toBe('responses-profile')
+    expect(settings.workbenchImagesProfileId).toBeNull()
+  })
+
+  it('creates and binds separate workbench API profiles for analysis and generation', () => {
+    const settings = ensureWorkbenchApiProfiles({
+      profiles: [
+        createDefaultOpenAIProfile({
+          id: 'image-source',
+          apiMode: 'images',
+          baseUrl: 'https://api.example.com/v1',
+          apiKey: 'sk-source',
+          model: 'custom-image-model',
+          timeout: 120,
+          streamPartialImages: 2,
+        }),
+      ],
+      activeProfileId: 'image-source',
+    }, (prefix) => `${prefix}-id`)
+
+    const responsesProfile = settings.profiles.find((profile) => profile.id === 'openai-responses-id')
+    const imagesProfile = settings.profiles.find((profile) => profile.id === 'image-source')
+
+    expect(settings.workbenchResponsesProfileId).toBe('openai-responses-id')
+    expect(settings.workbenchImagesProfileId).toBe('image-source')
+    expect(settings.workbenchResponsesProfileId).not.toBe(settings.workbenchImagesProfileId)
+    expect(settings.activeProfileId).toBe('openai-responses-id')
+    expect(responsesProfile).toMatchObject({
+      apiKey: 'sk-source',
+      baseUrl: 'https://api.example.com/v1',
+      apiMode: 'responses',
+      model: DEFAULT_RESPONSES_MODEL,
+      streamImages: false,
+      streamPartialImages: 2,
+      timeout: 120,
+    })
+    expect(imagesProfile).toMatchObject({
+      apiMode: 'images',
+      model: 'custom-image-model',
+    })
   })
 
   it('restores OpenAI-compatible URL after switching through fal.ai', () => {

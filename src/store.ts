@@ -17,7 +17,7 @@ import type {
   ResponsesOutputItem,
 } from './types'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_PARAMS } from './types'
-import { DEFAULT_SETTINGS, getActiveApiProfile, getCustomProviderDefinition, mergeImportedSettings, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
+import { DEFAULT_SETTINGS, getActiveApiProfile, getCustomProviderDefinition, getWorkbenchImagesProfile, getWorkbenchResponsesProfile, mergeImportedSettings, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
 import { dismissAllTooltips } from './lib/tooltipDismiss'
 import { remapImageMentionsForOrder, replaceImageMentionsForApi } from './lib/promptImageMentions'
 import {
@@ -42,6 +42,7 @@ import {
 } from './lib/db'
 import { callImageApi } from './lib/api'
 import { callAgentConversationTitleApi, callAgentResponsesApi, callBatchImageSingle, parseBatchImageCallArguments, type AgentApiResultImage, type BatchImageCallResult } from './lib/agentApi'
+import { callWorkbenchPromptPlanApi, callWorkbenchSellingPointApi, type WorkbenchEcommerceBrief, type WorkbenchPromptPlan, type WorkbenchSellingPointPlan } from './lib/workbench'
 import { collectAgentRoundOutputImageSlots, extractAgentReferenceIds, getAgentCurrentReferenceId, getAgentGeneratedImageReferenceId, replaceAgentPromptImageReferencesForApi } from './lib/agentImageReferences'
 import { IMAGE_FETCH_CORS_HINT } from './lib/imageApiShared'
 import { getFalErrorMessage, getFalQueuedImageResult } from './lib/falAiImageApi'
@@ -78,6 +79,7 @@ const OPENAI_INTERRUPTED_ERROR = '请求中断'
 const AGENT_STOPPED_MESSAGE = '已停止生成。'
 const AGENT_CONVERSATION_TITLE_MAX_LENGTH = 28
 const ERROR_TOAST_MAX_LENGTH = 80
+const WORKBENCH_MAX_IMAGE_TASKS = 5
 type ToastType = 'info' | 'success' | 'error'
 type AgentInputDraft = {
   prompt: string
@@ -85,6 +87,24 @@ type AgentInputDraft = {
   maskDraft: MaskDraft | null
   maskEditorImageId: string | null
   updatedAt?: number
+}
+
+export interface WorkbenchEcommerceSubmitInput {
+  brief: Omit<WorkbenchEcommerceBrief, 'imageCount'>
+  productImages: InputImage[]
+  sellingPointPlan: WorkbenchSellingPointPlan
+  confirmationNote?: string
+}
+
+export interface WorkbenchEcommerceSubmitResult {
+  plan: WorkbenchPromptPlan
+  taskIds: string[]
+}
+
+export interface WorkbenchEcommerceAnalyzeInput {
+  brief: Omit<WorkbenchEcommerceBrief, 'imageCount'>
+  productImages: InputImage[]
+  feedback?: string
 }
 
 export function getErrorToastMessage(message: string): string {
@@ -644,7 +664,7 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
     typeof persisted.activeAgentConversationId === 'string' && (!hasPersistedAgentConversations || agentConversations.some((conversation) => conversation.id === persisted.activeAgentConversationId))
       ? persisted.activeAgentConversationId
       : agentConversations[0]?.id ?? null
-  const appMode = persisted.appMode === 'agent' ? 'agent' : 'gallery'
+  const appMode = persisted.appMode === 'workbench' ? 'workbench' : 'gallery'
   const galleryInputDraft = settings.persistInputOnRestart
     ? normalizeAgentInputDraft(persisted.galleryInputDraft ?? {
         prompt: persisted.prompt,
@@ -656,21 +676,7 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
   const normalizedAgentInputDrafts = hasPersistedAgentConversations
     ? normalizeAgentInputDrafts(persisted.agentInputDrafts, agentConversations)
     : normalizeAgentInputDraftsByKey(persisted.agentInputDrafts)
-  let agentInputDrafts = cleanStaleAgentInputDrafts(normalizedAgentInputDrafts, activeAgentConversationId)
-  if (appMode === 'agent' && activeAgentConversationId && !agentInputDrafts[activeAgentConversationId] && settings.persistInputOnRestart && typeof persisted.prompt === 'string') {
-    agentInputDrafts = {
-      ...agentInputDrafts,
-      [activeAgentConversationId]: normalizeAgentInputDraft({
-        prompt: persisted.prompt,
-        inputImages: persisted.inputImages,
-        maskDraft: null,
-        maskEditorImageId: null,
-      }, Date.now()),
-    }
-  }
-  const restoredAgentDraft = appMode === 'agent' && activeAgentConversationId
-    ? agentInputDrafts[activeAgentConversationId] ?? null
-    : null
+  const agentInputDrafts = cleanStaleAgentInputDrafts(normalizedAgentInputDrafts, activeAgentConversationId)
   return {
     ...currentState,
     ...persisted,
@@ -686,10 +692,10 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
     supportPromptDismissed: Boolean(persisted.supportPromptDismissed),
     supportPromptOpen: Boolean(persisted.supportPromptOpen),
     supportPromptSkippedForImportedData: Boolean(persisted.supportPromptSkippedForImportedData),
-    prompt: restoredAgentDraft ? restoredAgentDraft.prompt : galleryInputDraft?.prompt ?? '',
-    inputImages: restoredAgentDraft ? restoredAgentDraft.inputImages : galleryInputDraft?.inputImages ?? [],
-    maskDraft: restoredAgentDraft ? restoredAgentDraft.maskDraft : galleryInputDraft?.maskDraft ?? null,
-    maskEditorImageId: restoredAgentDraft ? restoredAgentDraft.maskEditorImageId : galleryInputDraft?.maskEditorImageId ?? null,
+    prompt: galleryInputDraft?.prompt ?? '',
+    inputImages: galleryInputDraft?.inputImages ?? [],
+    maskDraft: galleryInputDraft?.maskDraft ?? null,
+    maskEditorImageId: galleryInputDraft?.maskEditorImageId ?? null,
   }
 }
 
@@ -1058,8 +1064,24 @@ export const useStore = create<AppState>()(
             agentMobileHeaderVisible: true,
             selectedTaskIds: [],
             agentEditingRoundId: null,
-            ...(state.appMode === 'agent' ? restoreGalleryInputDraftState(galleryInputDraft) : {}),
+            ...(state.appMode !== 'gallery' ? restoreGalleryInputDraftState(galleryInputDraft) : {}),
           }))
+          return
+        }
+
+        if (appMode === 'workbench') {
+          const state = get()
+          const agentInputDrafts = saveActiveAgentInputDrafts(state)
+          const galleryInputDraft = saveGalleryInputDraft(state)
+          set({
+            appMode,
+            agentInputDrafts,
+            galleryInputDraft,
+            agentMobileHeaderVisible: true,
+            agentSidebarCollapsed: true,
+            selectedTaskIds: [],
+            agentEditingRoundId: null,
+          })
           return
         }
 
@@ -2197,6 +2219,149 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
 
   // 异步调用 API
   executeTask(taskId)
+}
+
+export async function analyzeWorkbenchEcommerceSellingPoints(input: WorkbenchEcommerceAnalyzeInput): Promise<WorkbenchSellingPointPlan | null> {
+  const state = useStore.getState()
+  const { showToast } = state
+  const normalizedSettings = normalizeSettings(state.settings)
+  const responsesProfile = getWorkbenchResponsesProfile(normalizedSettings)
+
+  if (!responsesProfile || responsesProfile.provider !== 'openai' || responsesProfile.apiMode !== 'responses') {
+    showToast('请先在设置中选择工作台对话 Responses API 配置', 'error')
+    state.setShowSettings(true, 'api')
+    return null
+  }
+
+  const responsesProfileError = validateApiProfile(responsesProfile)
+  if (responsesProfileError) {
+    showToast(`工作台对话配置不完整：${responsesProfileError}`, 'error')
+    state.setShowSettings(true, 'api')
+    return null
+  }
+
+  const productImages = input.productImages
+  for (const image of productImages) {
+    await storeImage(image.dataUrl, 'upload')
+    cacheImage(image.id, image.dataUrl)
+  }
+
+  showToast('正在提炼必卖理由卡片...', 'info')
+  const brief: WorkbenchEcommerceBrief = {
+    ...input.brief,
+    imageCount: productImages.length,
+  }
+  return callWorkbenchSellingPointApi({
+    profile: responsesProfile,
+    brief,
+    feedback: input.feedback,
+    imageDataUrls: productImages.map((image) => image.dataUrl),
+  })
+}
+
+export async function submitWorkbenchEcommerceImageSet(input: WorkbenchEcommerceSubmitInput): Promise<WorkbenchEcommerceSubmitResult | null> {
+  const state = useStore.getState()
+  const { showToast } = state
+  const normalizedSettings = normalizeSettings(state.settings)
+  const responsesProfile = getWorkbenchResponsesProfile(normalizedSettings)
+  const imagesProfile = getWorkbenchImagesProfile(normalizedSettings)
+
+  if (!responsesProfile || responsesProfile.provider !== 'openai' || responsesProfile.apiMode !== 'responses') {
+    showToast('请先在设置中选择工作台对话 Responses API 配置', 'error')
+    state.setShowSettings(true, 'api')
+    return null
+  }
+  if (!imagesProfile || imagesProfile.apiMode !== 'images') {
+    showToast('请先在设置中选择工作台生图 Images API 配置', 'error')
+    state.setShowSettings(true, 'api')
+    return null
+  }
+
+  const responsesProfileError = validateApiProfile(responsesProfile)
+  if (responsesProfileError) {
+    showToast(`工作台对话配置不完整：${responsesProfileError}`, 'error')
+    state.setShowSettings(true, 'api')
+    return null
+  }
+  const imagesProfileError = validateApiProfile(imagesProfile)
+  if (imagesProfileError) {
+    showToast(`工作台生图配置不完整：${imagesProfileError}`, 'error')
+    state.setShowSettings(true, 'api')
+    return null
+  }
+
+  const productImages = input.productImages
+  for (const image of productImages) {
+    await storeImage(image.dataUrl, 'upload')
+    cacheImage(image.id, image.dataUrl)
+  }
+
+  showToast('已确认必卖理由，正在生成执行方案和生图 prompt...', 'info')
+  const brief: WorkbenchEcommerceBrief = {
+    ...input.brief,
+    imageCount: productImages.length,
+  }
+  const plan = await callWorkbenchPromptPlanApi({
+    profile: responsesProfile,
+    brief,
+    sellingPointPlan: input.sellingPointPlan,
+    confirmationNote: input.confirmationNote,
+    imageDataUrls: productImages.map((image) => image.dataUrl),
+  })
+
+  const requestSettings = createSettingsForApiProfile(normalizedSettings, imagesProfile)
+  const baseParams = normalizeParamsForSettings(state.params, requestSettings, { hasInputImages: productImages.length > 0 })
+  const runId = genId()
+  const createdAt = Date.now()
+  const promptItems = plan.prompts.slice(0, WORKBENCH_MAX_IMAGE_TASKS)
+  const tasks: TaskRecord[] = promptItems.map((item, index) => {
+    const selectedIndexes = item.inputImageIndexes.length ? item.inputImageIndexes : productImages.map((_, imageIndex) => imageIndex)
+    const inputImageIds = uniqueIds(
+      selectedIndexes
+        .map((imageIndex) => productImages[imageIndex]?.id)
+        .filter((id): id is string => Boolean(id)),
+    )
+
+    return {
+      id: genId(),
+      prompt: item.prompt,
+      params: {
+        ...baseParams,
+        ...(item.size ? { size: item.size } : {}),
+        n: 1,
+      },
+      apiProvider: imagesProfile.provider,
+      apiProfileId: imagesProfile.id,
+      apiProfileName: imagesProfile.name,
+      apiMode: imagesProfile.apiMode,
+      apiModel: imagesProfile.model,
+      inputImageIds,
+      outputImages: [],
+      status: 'running',
+      error: null,
+      createdAt: createdAt + index,
+      finishedAt: null,
+      elapsed: null,
+      sourceMode: 'workbench',
+      workbenchRunId: runId,
+      workbenchPromptTitle: item.title,
+    }
+  })
+
+  useStore.getState().setTasks([...tasks, ...useStore.getState().tasks])
+  for (const task of tasks) {
+    await putTask(task)
+  }
+  showToast(`已生成 ${tasks.length} 个画廊任务，开始并发出图`, 'success')
+
+  void (async () => {
+    await Promise.allSettled(tasks.map((task) => executeTask(task.id)))
+  })()
+
+  return {
+    plan,
+    taskIds: tasks.map((task) => task.id),
+  }
 }
 
 function getActiveAgentConversation(): AgentConversation {

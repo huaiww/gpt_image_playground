@@ -169,7 +169,7 @@ export default function Header() {
                 </a>
               )}
             </h1>
-            {appMode === 'agent' && <div className="hidden sm:flex items-center gap-1 relative">
+            <div className="hidden sm:flex items-center gap-1 relative">
               <button
                 ref={historyButtonRef}
                 type="button"
@@ -181,10 +181,7 @@ export default function Header() {
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  setAppMode('agent')
-                  createConversation()
-                }}
+                onClick={() => createConversation()}
                 className="p-1.5 text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-white/[0.04] rounded-lg transition-colors"
                 title="新对话"
               >
@@ -193,7 +190,7 @@ export default function Header() {
               {showHistoryModal && (
                 <HistoryModal onClose={() => setShowHistoryModal(false)} ignoreOutsideClickRef={historyButtonRef} />
               )}
-            </div>}
+            </div>
           </div>
           {appMode === 'agent' && activeConversation && (
             <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 hidden sm:flex max-w-[30%]">
@@ -222,10 +219,10 @@ export default function Header() {
             </button>
             <button
               type="button"
-              onClick={() => setAppMode('agent')}
-              className={`px-4 py-1.5 rounded-lg text-sm transition-colors ${appMode === 'agent' ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm font-medium' : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'}`}
+              onClick={() => setAppMode('workbench')}
+              className={`px-4 py-1.5 rounded-lg text-sm transition-colors ${appMode === 'workbench' ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm font-medium' : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'}`}
             >
-              Agent
+              工作台
             </button>
           </div>
           <div className="flex items-center gap-1 shrink-0">
@@ -285,7 +282,7 @@ export default function Header() {
           </div>
         </div>
         <div className={`safe-area-x sm:hidden overflow-hidden transition-all duration-300 ease-in-out ${appMode === 'gallery' && scrollDirection === 'down' ? 'max-h-0 opacity-0 pb-0' : 'max-h-20 opacity-100 pb-2'}`}>
-          <div className="grid grid-cols-2 gap-1 rounded-xl border border-gray-200 dark:border-white/[0.08] bg-gray-100/70 dark:bg-white/[0.04] p-1 mx-2">
+          <div className="grid grid-cols-3 gap-1 rounded-xl border border-gray-200 dark:border-white/[0.08] bg-gray-100/70 dark:bg-white/[0.04] p-1 mx-2">
             <button
               type="button"
               onClick={() => setAppMode('gallery')}
@@ -295,10 +292,10 @@ export default function Header() {
             </button>
             <button
               type="button"
-              onClick={() => setAppMode('agent')}
-              className={`px-4 py-1.5 rounded-lg text-sm transition-colors ${appMode === 'agent' ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm font-medium' : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'}`}
+              onClick={() => setAppMode('workbench')}
+              className={`px-4 py-1.5 rounded-lg text-sm transition-colors ${appMode === 'workbench' ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm font-medium' : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'}`}
             >
-              Agent
+              工作台
             </button>
           </div>
         </div>

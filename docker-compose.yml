@@ -1,0 +1,23 @@
+services:
+  gpt-image-playground:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    image: gpt-image-playground:local
+    container_name: gpt-image-playground
+    restart: unless-stopped
+    ports:
+      - "9527:80"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 80
+      DEFAULT_API_URL: ""
+      ENABLE_API_PROXY: "false"
+      LOCK_API_PROXY: "false"
+      API_PROXY_URL: ""
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

@@ -1,7 +1,7 @@
 // ===== 设置 =====
 
 export type ApiMode = 'images' | 'responses'
-export type AppMode = 'gallery' | 'agent'
+export type AppMode = 'gallery' | 'agent' | 'workbench'
 export type ReferenceImageEditAction = 'ask' | 'replace-reference' | 'add-mask'
 export type BuiltInApiProvider = 'openai' | 'fal'
 export type ApiProvider = BuiltInApiProvider | string
@@ -95,6 +95,8 @@ export interface AppSettings {
   agentScrollToBottomAfterSubmit: boolean
   agentMaxToolRounds: number
   agentWebSearch: boolean
+  workbenchResponsesProfileId: string | null
+  workbenchImagesProfileId: string | null
   profiles: ApiProfile[]
   activeProfileId: string
 }
@@ -202,6 +204,10 @@ export interface TaskRecord {
   agentBatchCallId?: string
   /** Agent 图像工具实际动作 */
   agentToolAction?: 'generate' | 'edit' | 'auto' | string
+  /** 工作台运行 ID */
+  workbenchRunId?: string
+  /** 工作台生成项标题 */
+  workbenchPromptTitle?: string
 }
 
 // ===== Agent 模式 =====

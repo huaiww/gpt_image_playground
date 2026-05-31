@@ -11,6 +11,7 @@ import {
   DEFAULT_OPENAI_PROFILE_ID,
   DEFAULT_RESPONSES_MODEL,
   DEFAULT_SETTINGS,
+  ensureWorkbenchApiProfiles,
   findEquivalentApiProfile,
   getApiProviderLabel,
   getActiveApiProfile,
@@ -351,6 +352,12 @@ export default function SettingsModal() {
   const activeCustomProviderAsync = isAsyncCustomProvider(activeCustomProvider)
   const apiProxyChecked = activeProfileApiProxyEligible && (apiProxyLocked || activeProfile.apiProxy)
   const apiProxyEnabled = apiProxyAvailable && activeProfileApiProxyEligible && apiProxyChecked
+  const workbenchResponsesProfileOptions = draft.profiles
+    .filter((profile) => profile.provider === 'openai' && profile.apiMode === 'responses')
+    .map((profile) => ({ label: `${profile.name} · ${profile.model}`, value: profile.id }))
+  const workbenchImagesProfileOptions = draft.profiles
+    .filter((profile) => profile.apiMode === 'images')
+    .map((profile) => ({ label: `${profile.name} · ${profile.model}`, value: profile.id }))
   const defaultProviderOrder = ['openai', 'fal', ...draft.customProviders.map(p => p.id)]
   const providerOrder = draft.providerOrder || defaultProviderOrder
 
@@ -719,6 +726,15 @@ export default function SettingsModal() {
     })
     commitSettings(nextDraft)
     setShowProfileMenu(false)
+  }
+
+  const ensureWorkbenchProfiles = () => {
+    setReusedTaskApiProfile(null)
+    const nextDraft = ensureWorkbenchApiProfiles(draft, newId)
+    commitSettings(nextDraft)
+    setTimeoutInput(String(getActiveApiProfile(nextDraft).timeout))
+    setShowProfileMenu(false)
+    showToast('已补齐工作台对话和生图配置', 'success')
   }
 
   const switchProfile = (id: string) => {
@@ -1110,17 +1126,6 @@ export default function SettingsModal() {
                 习惯配置
               </button>
               <button
-                onClick={() => setActiveTab('agent')}
-                className={`whitespace-nowrap flex-shrink-0 flex items-center gap-2.5 px-3 py-2.5 text-sm rounded-xl transition-colors ${activeTab === 'agent' ? 'bg-white dark:bg-white/[0.08] shadow-sm text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100/80 dark:hover:bg-white/[0.04]'}`}
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8V4H8" />
-                  <rect width="16" height="12" x="4" y="8" rx="2" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2 14h2M20 14h2M15 13v2M9 13v2" />
-                </svg>
-                Agent 配置
-              </button>
-              <button
                 onClick={() => setActiveTab('data')}
                 className={`whitespace-nowrap flex-shrink-0 flex items-center gap-2.5 px-3 py-2.5 text-sm rounded-xl transition-colors ${activeTab === 'data' ? 'bg-white dark:bg-white/[0.08] shadow-sm text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100/80 dark:hover:bg-white/[0.04]'}`}
               >
@@ -1278,50 +1283,6 @@ export default function SettingsModal() {
               </div>
             )}
 
-            {activeTab === 'agent' && (
-              <div className="space-y-4">
-                <label className="block">
-                  <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">最大工具调用轮数</span>
-                  <input
-                    value={agentMaxToolRoundsInput}
-                    onChange={(e) => setAgentMaxToolRoundsInput(e.target.value)}
-                    onBlur={commitAgentMaxToolRounds}
-                    type="number"
-                    min={1}
-                    max={50}
-                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
-                  />
-                  <div data-selectable-text className="mt-1.5 text-xs leading-relaxed text-gray-500 dark:text-gray-500">
-                    默认 15。用于限制 Agent 连续调用工具时的最大轮数，防止无限循环。
-                  </div>
-                </label>
-                <div className="block">
-                  <div className="mb-1 flex items-center justify-between gap-3">
-                    <span className="block text-sm text-gray-600 dark:text-gray-300">网络搜索</span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const agentMaxToolRounds = agentMaxToolRoundsInput.trim() === ''
-                          ? DEFAULT_AGENT_MAX_TOOL_ROUNDS
-                          : normalizeAgentMaxToolRounds(agentMaxToolRoundsInput, draft.agentMaxToolRounds)
-                        setAgentMaxToolRoundsInput(String(agentMaxToolRounds))
-                        commitSettings({ ...draft, agentMaxToolRounds, agentWebSearch: !draft.agentWebSearch })
-                      }}
-                      className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors ${draft.agentWebSearch ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
-                      role="switch"
-                      aria-checked={draft.agentWebSearch}
-                      aria-label="网络搜索"
-                    >
-                      <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${draft.agentWebSearch ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
-                    </button>
-                  </div>
-                  <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
-                    启用 Responses API 的 <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[10px] dark:bg-white/[0.06]">web_search</code> 工具。模型每次调用此工具会产生少量固定价格的额外计费。
-                  </div>
-                </div>
-              </div>
-            )}
-            
             {activeTab === 'api' && (
               <div className="space-y-4">
                 <div>
@@ -1504,6 +1465,70 @@ export default function SettingsModal() {
                     )}
                   </div>
                 </div>
+
+              <div className="rounded-xl border border-gray-200/70 bg-gray-50/70 p-3 dark:border-white/[0.08] dark:bg-white/[0.03]">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-100">工作台配置</h3>
+                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Responses 用于分析对话，Images 用于画廊出图。</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={ensureWorkbenchProfiles}
+                    className="shrink-0 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-blue-500"
+                  >
+                    一键补齐
+                  </button>
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <label className="block">
+                    <span className="mb-1.5 flex items-center justify-between gap-2 text-xs text-gray-500 dark:text-gray-400">
+                      <span>对话分析配置</span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault()
+                          if (draft.workbenchResponsesProfileId) switchProfile(draft.workbenchResponsesProfileId)
+                        }}
+                        disabled={!draft.workbenchResponsesProfileId}
+                        className="rounded-md px-2 py-1 text-blue-600 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:text-gray-400 disabled:hover:bg-transparent dark:text-blue-400 dark:hover:bg-blue-500/10 dark:disabled:text-gray-600"
+                      >
+                        编辑
+                      </button>
+                    </span>
+                    <Select
+                      value={draft.workbenchResponsesProfileId ?? ''}
+                      onChange={(value) => commitSettings({ ...draft, activeProfileId: String(value), workbenchResponsesProfileId: String(value) })}
+                      options={workbenchResponsesProfileOptions.length ? workbenchResponsesProfileOptions : [{ label: '请创建 Responses API 配置', value: '' }]}
+                      disabled={workbenchResponsesProfileOptions.length === 0}
+                      className="rounded-xl border border-gray-200/70 bg-white/70 px-3 py-2.5 text-sm text-gray-700 outline-none transition dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1.5 flex items-center justify-between gap-2 text-xs text-gray-500 dark:text-gray-400">
+                      <span>画廊生图配置</span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault()
+                          if (draft.workbenchImagesProfileId) switchProfile(draft.workbenchImagesProfileId)
+                        }}
+                        disabled={!draft.workbenchImagesProfileId}
+                        className="rounded-md px-2 py-1 text-blue-600 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:text-gray-400 disabled:hover:bg-transparent dark:text-blue-400 dark:hover:bg-blue-500/10 dark:disabled:text-gray-600"
+                      >
+                        编辑
+                      </button>
+                    </span>
+                    <Select
+                      value={draft.workbenchImagesProfileId ?? ''}
+                      onChange={(value) => commitSettings({ ...draft, activeProfileId: String(value), workbenchImagesProfileId: String(value) })}
+                      options={workbenchImagesProfileOptions.length ? workbenchImagesProfileOptions : [{ label: '请创建 Images API 配置', value: '' }]}
+                      disabled={workbenchImagesProfileOptions.length === 0}
+                      className="rounded-xl border border-gray-200/70 bg-white/70 px-3 py-2.5 text-sm text-gray-700 outline-none transition dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
+                    />
+                  </label>
+                </div>
+              </div>
 
               {/* 1. 配置名称 */}
               <label className="block">
