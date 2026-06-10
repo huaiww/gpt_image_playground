@@ -24,6 +24,14 @@ type WorkbenchModule = {
   steps: string[]
 }
 
+type StoredWorkbenchDraft = Partial<FormState> & {
+  productImageIds?: unknown
+  sellingPointFeedback?: unknown
+  confirmationNote?: unknown
+  sellingPointPlan?: unknown
+  artifactMarkdown?: unknown
+}
+
 const WORKBENCH_MODULES: WorkbenchModule[] = [
   {
     id: 'ecommerce-image-set',
@@ -59,6 +67,16 @@ function getMissingRecommendedFields(form: FormState, images: InputImage[]) {
   if (!form.competitorResearch.trim()) missing.push('竞品链接/截图')
   if (images.length === 0) missing.push('产品实拍图')
   return missing
+}
+
+function isWorkbenchSellingPointPlan(input: unknown): input is WorkbenchSellingPointPlan {
+  if (!input || typeof input !== 'object') return false
+  const record = input as Record<string, unknown>
+  return Array.isArray(record.missingRequired) &&
+    Array.isArray(record.missingRecommended) &&
+    typeof record.summary === 'string' &&
+    Array.isArray(record.sellingPoints) &&
+    Array.isArray(record.complianceNotes)
 }
 
 function ModuleSteps({ steps, open }: { steps: string[]; open: boolean }) {
@@ -98,6 +116,7 @@ export default function WorkbenchWorkspace() {
   const [artifactMarkdown, setArtifactMarkdown] = useState('')
   const [submittingStep2, setSubmittingStep2] = useState(false)
   const [submittingFinal, setSubmittingFinal] = useState(false)
+  const [draftHydrated, setDraftHydrated] = useState(false)
 
   const currentModule = useMemo(
     () => WORKBENCH_MODULES.find((module) => module.id === selectedModuleId) ?? WORKBENCH_MODULES[0],
@@ -107,11 +126,17 @@ export default function WorkbenchWorkspace() {
   const missingRecommendedFields = useMemo(() => getMissingRecommendedFields(form, productImages), [form, productImages])
 
   useEffect(() => {
+    let cancelled = false
     const raw = localStorage.getItem(DRAFT_STORAGE_KEY)
-    if (!raw) return
+    if (!raw) {
+      setDraftHydrated(true)
+      return
+    }
 
-    try {
-      const parsed = JSON.parse(raw) as Partial<FormState> & { productImageIds?: string[] }
+    const hydrateDraft = async () => {
+      try {
+        const parsed = JSON.parse(raw) as StoredWorkbenchDraft
+        if (cancelled) return
       setForm({
         heroCopyDraft: typeof parsed.heroCopyDraft === 'string' ? parsed.heroCopyDraft : '',
         productType: PRODUCT_TYPES.includes(parsed.productType as WorkbenchProductType) ? parsed.productType as WorkbenchProductType : '普通食品',
@@ -121,26 +146,43 @@ export default function WorkbenchWorkspace() {
         audienceAnalysis: typeof parsed.audienceAnalysis === 'string' ? parsed.audienceAnalysis : '',
         competitorResearch: typeof parsed.competitorResearch === 'string' ? parsed.competitorResearch : '',
       })
+      setSellingPointFeedback(typeof parsed.sellingPointFeedback === 'string' ? parsed.sellingPointFeedback : '')
+      setConfirmationNote(typeof parsed.confirmationNote === 'string' ? parsed.confirmationNote : '')
+      setSellingPointPlan(isWorkbenchSellingPointPlan(parsed.sellingPointPlan) ? parsed.sellingPointPlan : null)
+      setArtifactMarkdown(typeof parsed.artifactMarkdown === 'string' ? parsed.artifactMarkdown : '')
       const imageIds = Array.isArray(parsed.productImageIds) ? parsed.productImageIds.filter((id): id is string => typeof id === 'string') : []
       if (imageIds.length) {
-        void Promise.all(imageIds.map(async (id) => {
+        const images = await Promise.all(imageIds.map(async (id) => {
           const dataUrl = await ensureImageCached(id)
           return dataUrl ? { id, dataUrl } : null
-        })).then((images) => {
-          setProductImages(images.filter((image): image is InputImage => image != null))
-        })
+        }))
+        if (!cancelled) setProductImages(images.filter((image): image is InputImage => image != null))
       }
-    } catch {
-      localStorage.removeItem(DRAFT_STORAGE_KEY)
+      } catch {
+        localStorage.removeItem(DRAFT_STORAGE_KEY)
+      } finally {
+        if (!cancelled) setDraftHydrated(true)
+      }
+    }
+
+    void hydrateDraft()
+
+    return () => {
+      cancelled = true
     }
   }, [])
 
   useEffect(() => {
+    if (!draftHydrated) return
     localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({
       ...form,
       productImageIds: productImages.map((image) => image.id),
+      sellingPointFeedback,
+      confirmationNote,
+      sellingPointPlan,
+      artifactMarkdown,
     }))
-  }, [form, productImages])
+  }, [artifactMarkdown, confirmationNote, draftHydrated, form, productImages, sellingPointFeedback, sellingPointPlan])
 
   const resetGeneratedState = () => {
     setSellingPointPlan(null)

@@ -49,6 +49,17 @@ const DEFAULT_COPY_IMPORT_URL_OPTIONS = {
 }
 
 type CopyImportUrlOptions = typeof DEFAULT_COPY_IMPORT_URL_OPTIONS
+type WorkbenchConfigTarget = 'responses' | 'images'
+
+type WorkbenchConfigEditorState = {
+  target: WorkbenchConfigTarget
+  profileId: string
+  title: string
+  apiKey: string
+  baseUrl: string
+  apiMode: AppSettings['apiMode']
+  model: string
+}
 
 function readCopyImportUrlOptions(): CopyImportUrlOptions {
   if (typeof window === 'undefined') return DEFAULT_COPY_IMPORT_URL_OPTIONS
@@ -305,7 +316,6 @@ export default function SettingsModal() {
   const [draft, setDraft] = useState<AppSettings>(normalizeSettings(settings))
   const [timeoutInput, setTimeoutInput] = useState(String(getActiveApiProfile(settings).timeout))
   const [agentMaxToolRoundsInput, setAgentMaxToolRoundsInput] = useState(String(settings.agentMaxToolRounds))
-  const [showApiKey, setShowApiKey] = useState(false)
   const [showProfileMenu, setShowProfileMenu] = useState(false)
   const [profileMenuMaxHeight, setProfileMenuMaxHeight] = useState(DEFAULT_DROPDOWN_MAX_HEIGHT)
   const [showCustomProviderImport, setShowCustomProviderImport] = useState(false)
@@ -340,24 +350,19 @@ export default function SettingsModal() {
   const profileTouchDragRef = useRef<{ id: string, startX: number, startY: number, moved: boolean } | null>(null)
   const [copyImportUrlProfile, setCopyImportUrlProfile] = useState<ApiProfile | null>(null)
   const [copyImportUrlOptions, setCopyImportUrlOptions] = useState<CopyImportUrlOptions>(readCopyImportUrlOptions)
+  const [workbenchConfigEditor, setWorkbenchConfigEditor] = useState<WorkbenchConfigEditorState | null>(null)
 
   const apiProxyConfig = readClientDevProxyConfig()
   const apiProxyAvailable = isApiProxyAvailable(apiProxyConfig)
   const apiProxyLocked = isApiProxyLocked(apiProxyConfig)
   const activeProfile = draft.profiles.find((profile) => profile.id === draft.activeProfileId) ?? draft.profiles[0] ?? getActiveApiProfile(draft)
   const activeProviderIsOpenAICompatible = isOpenAICompatibleProvider(draft, activeProfile.provider)
-  const activeProviderUsesApiUrl = activeProviderIsOpenAICompatible || activeProfile.provider === 'fal'
   const activeCustomProvider = draft.customProviders.find((provider) => provider.id === activeProfile.provider)
   const activeProfileApiProxyEligible = isProfileApiProxyEligible(draft, activeProfile)
   const activeCustomProviderAsync = isAsyncCustomProvider(activeCustomProvider)
   const apiProxyChecked = activeProfileApiProxyEligible && (apiProxyLocked || activeProfile.apiProxy)
-  const apiProxyEnabled = apiProxyAvailable && activeProfileApiProxyEligible && apiProxyChecked
-  const workbenchResponsesProfileOptions = draft.profiles
-    .filter((profile) => profile.provider === 'openai' && profile.apiMode === 'responses')
-    .map((profile) => ({ label: `${profile.name} · ${profile.model}`, value: profile.id }))
-  const workbenchImagesProfileOptions = draft.profiles
-    .filter((profile) => profile.apiMode === 'images')
-    .map((profile) => ({ label: `${profile.name} · ${profile.model}`, value: profile.id }))
+  const workbenchResponsesProfile = draft.profiles.find((profile) => profile.id === draft.workbenchResponsesProfileId) ?? null
+  const workbenchImagesProfile = draft.profiles.find((profile) => profile.id === draft.workbenchImagesProfileId) ?? null
   const defaultProviderOrder = ['openai', 'fal', ...draft.customProviders.map(p => p.id)]
   const providerOrder = draft.providerOrder || defaultProviderOrder
 
@@ -728,13 +733,61 @@ export default function SettingsModal() {
     setShowProfileMenu(false)
   }
 
-  const ensureWorkbenchProfiles = () => {
+  const openWorkbenchConfigEditor = (target: WorkbenchConfigTarget) => {
     setReusedTaskApiProfile(null)
     const nextDraft = ensureWorkbenchApiProfiles(draft, newId)
+    const profileId = target === 'responses' ? nextDraft.workbenchResponsesProfileId : nextDraft.workbenchImagesProfileId
+    const profile = nextDraft.profiles.find((item) => item.id === profileId)
+    if (!profile || !profileId) {
+      showToast('未找到工作台配置，请重试编辑', 'error')
+      return
+    }
+
     commitSettings(nextDraft)
     setTimeoutInput(String(getActiveApiProfile(nextDraft).timeout))
     setShowProfileMenu(false)
-    showToast('已补齐工作台对话和生图配置', 'success')
+    setWorkbenchConfigEditor({
+      target,
+      profileId,
+      title: target === 'responses' ? '编辑对话分析配置' : '编辑画廊生图配置',
+      apiKey: profile.apiKey,
+      baseUrl: profile.baseUrl,
+      apiMode: profile.apiMode,
+      model: profile.model,
+    })
+  }
+
+  const updateWorkbenchConfigEditor = (patch: Partial<Pick<WorkbenchConfigEditorState, 'apiKey' | 'baseUrl' | 'apiMode' | 'model'>>) => {
+    setWorkbenchConfigEditor((current) => current ? { ...current, ...patch } : current)
+  }
+
+  const saveWorkbenchConfigEditor = () => {
+    if (!workbenchConfigEditor) return
+
+    const nextProfiles = draft.profiles.map((profile) => {
+      if (profile.id !== workbenchConfigEditor.profileId) return profile
+      return {
+        ...profile,
+        apiKey: workbenchConfigEditor.apiKey,
+        baseUrl: workbenchConfigEditor.baseUrl,
+        model: workbenchConfigEditor.model,
+        provider: 'openai' as const,
+        apiMode: workbenchConfigEditor.apiMode,
+        codexCli: false,
+        streamImages: workbenchConfigEditor.apiMode === 'images' ? profile.streamImages : false,
+      }
+    })
+
+    const nextDraft = normalizeSettings({
+      ...draft,
+      profiles: nextProfiles,
+      workbenchResponsesProfileId: workbenchConfigEditor.target === 'responses' ? workbenchConfigEditor.profileId : draft.workbenchResponsesProfileId,
+      workbenchImagesProfileId: workbenchConfigEditor.target === 'images' ? workbenchConfigEditor.profileId : draft.workbenchImagesProfileId,
+    })
+    commitSettings(nextDraft)
+    setTimeoutInput(String(getActiveApiProfile(nextDraft).timeout))
+    setWorkbenchConfigEditor(null)
+    showToast('已保存工作台配置', 'success')
   }
 
   const switchProfile = (id: string) => {
@@ -1472,61 +1525,40 @@ export default function SettingsModal() {
                     <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-100">工作台配置</h3>
                     <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Responses 用于分析对话，Images 用于画廊出图。</p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={ensureWorkbenchProfiles}
-                    className="shrink-0 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-blue-500"
-                  >
-                    一键补齐
-                  </button>
                 </div>
                 <div className="grid gap-3 md:grid-cols-2">
-                  <label className="block">
-                    <span className="mb-1.5 flex items-center justify-between gap-2 text-xs text-gray-500 dark:text-gray-400">
-                      <span>对话分析配置</span>
+                  <div className="rounded-xl border border-gray-200/70 bg-white/70 p-3 dark:border-white/[0.08] dark:bg-white/[0.03]">
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <span className="text-xs font-medium text-gray-500 dark:text-gray-400">对话分析配置</span>
                       <button
                         type="button"
-                        onClick={(e) => {
-                          e.preventDefault()
-                          if (draft.workbenchResponsesProfileId) switchProfile(draft.workbenchResponsesProfileId)
-                        }}
-                        disabled={!draft.workbenchResponsesProfileId}
-                        className="rounded-md px-2 py-1 text-blue-600 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:text-gray-400 disabled:hover:bg-transparent dark:text-blue-400 dark:hover:bg-blue-500/10 dark:disabled:text-gray-600"
+                        onClick={() => openWorkbenchConfigEditor('responses')}
+                        className="rounded-md px-2 py-1 text-xs text-blue-600 transition hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-500/10"
                       >
                         编辑
                       </button>
-                    </span>
-                    <Select
-                      value={draft.workbenchResponsesProfileId ?? ''}
-                      onChange={(value) => commitSettings({ ...draft, activeProfileId: String(value), workbenchResponsesProfileId: String(value) })}
-                      options={workbenchResponsesProfileOptions.length ? workbenchResponsesProfileOptions : [{ label: '请创建 Responses API 配置', value: '' }]}
-                      disabled={workbenchResponsesProfileOptions.length === 0}
-                      className="rounded-xl border border-gray-200/70 bg-white/70 px-3 py-2.5 text-sm text-gray-700 outline-none transition dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="mb-1.5 flex items-center justify-between gap-2 text-xs text-gray-500 dark:text-gray-400">
-                      <span>画廊生图配置</span>
+                    </div>
+                    <div className="space-y-1 text-xs text-gray-500 dark:text-gray-400">
+                      <div>点击编辑配置 API Key、API URL、接口类型和模型。</div>
+                      <div>{workbenchResponsesProfile?.apiKey ? '已配置' : '未配置'}</div>
+                    </div>
+                  </div>
+                  <div className="rounded-xl border border-gray-200/70 bg-white/70 p-3 dark:border-white/[0.08] dark:bg-white/[0.03]">
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <span className="text-xs font-medium text-gray-500 dark:text-gray-400">画廊生图配置</span>
                       <button
                         type="button"
-                        onClick={(e) => {
-                          e.preventDefault()
-                          if (draft.workbenchImagesProfileId) switchProfile(draft.workbenchImagesProfileId)
-                        }}
-                        disabled={!draft.workbenchImagesProfileId}
-                        className="rounded-md px-2 py-1 text-blue-600 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:text-gray-400 disabled:hover:bg-transparent dark:text-blue-400 dark:hover:bg-blue-500/10 dark:disabled:text-gray-600"
+                        onClick={() => openWorkbenchConfigEditor('images')}
+                        className="rounded-md px-2 py-1 text-xs text-blue-600 transition hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-500/10"
                       >
                         编辑
                       </button>
-                    </span>
-                    <Select
-                      value={draft.workbenchImagesProfileId ?? ''}
-                      onChange={(value) => commitSettings({ ...draft, activeProfileId: String(value), workbenchImagesProfileId: String(value) })}
-                      options={workbenchImagesProfileOptions.length ? workbenchImagesProfileOptions : [{ label: '请创建 Images API 配置', value: '' }]}
-                      disabled={workbenchImagesProfileOptions.length === 0}
-                      className="rounded-xl border border-gray-200/70 bg-white/70 px-3 py-2.5 text-sm text-gray-700 outline-none transition dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
-                    />
-                  </label>
+                    </div>
+                    <div className="space-y-1 text-xs text-gray-500 dark:text-gray-400">
+                      <div>点击编辑配置 API Key、API URL、接口类型和模型。</div>
+                      <div>{workbenchImagesProfile?.apiKey ? '已配置' : '未配置'}</div>
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -1554,34 +1586,7 @@ export default function SettingsModal() {
                 />
               </div>
 
-              {/* 3. API URL */}
-              {activeProviderUsesApiUrl && (
-                <label className="block">
-                  <div className="mb-1.5 flex items-center justify-between">
-                    <span className="block text-sm text-gray-600 dark:text-gray-300">API URL</span>
-                  </div>
-                  <input
-                    value={activeProfile.baseUrl}
-                    onChange={(e) => updateActiveProfile({ baseUrl: e.target.value })}
-                    onBlur={(e) => commitActiveProfilePatch({ baseUrl: e.target.value })}
-                    type="text"
-                    disabled={apiProxyEnabled}
-                    placeholder={activeProfile.provider === 'fal' ? DEFAULT_FAL_BASE_URL : DEFAULT_SETTINGS.baseUrl}
-                    className={`w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50 ${apiProxyEnabled ? 'opacity-50 cursor-not-allowed' : ''}`}
-                  />
-                  <div data-selectable-text className="mt-1.5 min-h-[22px] flex items-center text-xs text-gray-500 dark:text-gray-500">
-                    {apiProxyEnabled ? (
-                      <span className="text-yellow-600 dark:text-yellow-500">已开启代理，实际请求目标由部署端决定，此处设置被忽略。</span>
-                    ) : activeProfile.provider === 'fal' ? (
-                      <span>默认使用 <code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">{DEFAULT_FAL_BASE_URL}</code>；填写自定义地址时将作为 fal.ai 代理 URL。</span>
-                    ) : (
-                      <span>支持通过查询参数覆盖：<code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">?apiUrl=</code></span>
-                    )}
-                  </div>
-                </label>
-              )}
-
-              {/* 4. API 代理（紧跟 URL） */}
+              {/* 3. API 代理 */}
               {apiProxyAvailable && activeProviderIsOpenAICompatible && !activeCustomProviderAsync && (
                 <div className="block">
                   <div className="mb-1.5 flex items-center justify-between">
@@ -1601,103 +1606,10 @@ export default function SettingsModal() {
                     </button>
                   </div>
                   <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
-                    {apiProxyLocked ? '部署端已锁定代理开启，请求经服务器转发到上游 API，上方 URL 设置将失效。' : '开启后请求经服务器转发到上游 API，可绕过浏览器跨域限制，上方 URL 设置将失效。'}
+                    {apiProxyLocked ? '部署端已锁定代理开启，请求经服务器转发到上游 API。' : '开启后请求经服务器转发到上游 API，可绕过浏览器跨域限制。'}
                   </div>
                 </div>
               )}
-
-              {/* 5. API Key */}
-              <div className="block">
-                <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">API Key</span>
-                <div className="relative">
-                  <input
-                    value={activeProfile.apiKey}
-                    onChange={(e) => updateActiveProfile({ apiKey: e.target.value })}
-                    onBlur={(e) => commitActiveProfilePatch({ apiKey: e.target.value })}
-                    type={showApiKey ? 'text' : 'password'}
-                    placeholder={activeProfile.provider === 'fal' ? 'FAL_KEY' : 'sk-...'}
-                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 pr-10 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowApiKey((v) => !v)}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-gray-400 hover:text-gray-600 transition-colors"
-                    tabIndex={-1}
-                  >
-                    {showApiKey ? (
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
-                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                        <circle cx="12" cy="12" r="3" />
-                      </svg>
-                    ) : (
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
-                        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
-                        <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
-                        <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
-                        <line x1="1" y1="1" x2="23" y2="23" />
-                      </svg>
-                    )}
-                  </button>
-                </div>
-                <div data-selectable-text className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">
-                  支持通过查询参数覆盖：<code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">?apiKey=</code>
-                </div>
-              </div>
-
-              {/* 6. API 接口（Images/Responses） */}
-              {activeProfile.provider === 'openai' && (
-                <div className="block">
-                  <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">API 接口</span>
-                  <Select
-                    value={activeProfile.apiMode ?? DEFAULT_SETTINGS.apiMode}
-                    onChange={(value) => {
-                      const apiMode = value as AppSettings['apiMode']
-                      const nextModel =
-                        activeProfile.model === DEFAULT_IMAGES_MODEL || activeProfile.model === DEFAULT_RESPONSES_MODEL
-                          ? getDefaultModelForMode(apiMode)
-                          : activeProfile.model
-                      updateActiveProfile({ apiMode, model: nextModel }, true)
-                    }}
-                    options={[
-                      { label: 'Images API (/v1/images)', value: 'images' },
-                      { label: 'Responses API (/v1/responses)', value: 'responses' },
-                    ]}
-                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
-                  />
-                  <div data-selectable-text className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">
-                    支持通过查询参数覆盖：<code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">apiMode=images</code> 或 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">apiMode=responses</code>。
-                  </div>
-                </div>
-              )}
-
-              {/* 7. 模型 ID（紧跟接口选择） */}
-              <label className="block">
-                <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">
-                  模型 ID
-                </span>
-                <input
-                  value={activeProfile.model}
-                  onChange={(e) => updateActiveProfile({ model: e.target.value })}
-                  onBlur={(e) => commitActiveProfilePatch({ model: e.target.value })}
-                  type="text"
-                  placeholder={activeProfile.provider === 'fal' ? DEFAULT_FAL_MODEL : getDefaultModelForMode(activeProfile.apiMode ?? DEFAULT_SETTINGS.apiMode)}
-                  className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
-                />
-                <div data-selectable-text className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">
-                  {activeProfile.provider === 'fal' ? (
-                    <>当前适配 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">{DEFAULT_FAL_MODEL}</code>。</>
-                  ) : activeCustomProvider ? (
-                    <>当前使用 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">{activeCustomProvider.name}</code>。</>
-                  ) : (activeProfile.apiMode ?? DEFAULT_SETTINGS.apiMode) === 'responses' ? (
-                    <>Responses API 需要使用支持 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">image_generation</code> 工具的文本模型，例如 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">{DEFAULT_RESPONSES_MODEL}</code>。</>
-                  ) : (
-                    <>Images API 需要使用 GPT Image 模型，例如 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">{DEFAULT_IMAGES_MODEL}</code>。</>
-                  )}
-                  {activeProfile.provider === 'openai' && (
-                    <>支持通过查询参数覆盖：<code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">?model=</code>。</>
-                  )}
-                </div>
-              </label>
 
               {/* 8. 流式传输 + 中间步骤图像数 */}
               {activeProfile.provider === 'openai' && (
@@ -2214,6 +2126,109 @@ export default function SettingsModal() {
                   className="flex-1 py-2 rounded-xl bg-blue-500 text-white text-sm font-medium hover:bg-blue-600 transition shadow-sm shadow-blue-500/20"
                 >
                   包含 API Key
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
+        {workbenchConfigEditor && createPortal(
+          <div
+            data-no-drag-select
+            className="fixed inset-0 z-[110] flex items-center justify-center p-4"
+            onClick={() => setWorkbenchConfigEditor(null)}
+          >
+            <div className="absolute inset-0 bg-black/20 backdrop-blur-md animate-overlay-in dark:bg-black/40" />
+            <div
+              className="relative z-10 w-full max-w-md rounded-3xl border border-white/50 bg-white/90 p-6 shadow-[0_8px_40px_rgb(0,0,0,0.12)] ring-1 ring-black/5 backdrop-blur-xl animate-confirm-in dark:border-white/[0.08] dark:bg-gray-900/90 dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] dark:ring-white/10"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button
+                type="button"
+                onClick={() => setWorkbenchConfigEditor(null)}
+                className="absolute right-4 top-4 shrink-0 rounded-full p-1.5 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-white/[0.06] dark:hover:text-gray-200"
+                aria-label="关闭"
+              >
+                <CloseIcon className="h-5 w-5" />
+              </button>
+
+              <h3 className="mb-2 pr-8 text-base font-bold text-gray-800 dark:text-gray-100">
+                {workbenchConfigEditor.title}
+              </h3>
+              <p className="mb-5 text-[13px] leading-relaxed text-gray-500 dark:text-gray-400">
+                {workbenchConfigEditor.target === 'responses'
+                  ? '用于工作台多轮对话分析，固定使用 Responses API。'
+                  : '用于工作台生成 prompt 后提交画廊出图，固定使用 Images API。'}
+              </p>
+
+              <div className="space-y-4">
+                <label className="block">
+                  <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">API Key</span>
+                  <input
+                    value={workbenchConfigEditor.apiKey}
+                    onChange={(e) => updateWorkbenchConfigEditor({ apiKey: e.target.value })}
+                    type="password"
+                    autoComplete="off"
+                    placeholder="sk-..."
+                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">API URL</span>
+                  <input
+                    value={workbenchConfigEditor.baseUrl}
+                    onChange={(e) => updateWorkbenchConfigEditor({ baseUrl: e.target.value })}
+                    type="text"
+                    placeholder={DEFAULT_SETTINGS.baseUrl}
+                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                  />
+                </label>
+                <div className="block">
+                  <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">API接口类型</span>
+                  <Select
+                    value={workbenchConfigEditor.apiMode}
+                    onChange={(value) => {
+                      const apiMode = value as AppSettings['apiMode']
+                      const nextModel =
+                        workbenchConfigEditor.model === DEFAULT_IMAGES_MODEL || workbenchConfigEditor.model === DEFAULT_RESPONSES_MODEL
+                          ? getDefaultModelForMode(apiMode)
+                          : workbenchConfigEditor.model
+                      updateWorkbenchConfigEditor({ apiMode, model: nextModel })
+                    }}
+                    options={[
+                      { label: 'Images API (/v1/images)', value: 'images' },
+                      { label: 'Responses API (/v1/responses)', value: 'responses' },
+                    ]}
+                    disabled
+                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
+                  />
+                </div>
+                <label className="block">
+                  <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">模型ID</span>
+                  <input
+                    value={workbenchConfigEditor.model}
+                    onChange={(e) => updateWorkbenchConfigEditor({ model: e.target.value })}
+                    type="text"
+                    placeholder={workbenchConfigEditor.target === 'responses' ? DEFAULT_RESPONSES_MODEL : DEFAULT_IMAGES_MODEL}
+                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                  />
+                </label>
+              </div>
+
+              <div className="mt-6 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setWorkbenchConfigEditor(null)}
+                  className="flex-1 rounded-xl border border-gray-200 py-2 text-sm text-gray-600 transition hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-400 dark:hover:bg-white/[0.06]"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  onClick={saveWorkbenchConfigEditor}
+                  className="flex-1 rounded-xl bg-blue-500 py-2 text-sm font-medium text-white shadow-sm shadow-blue-500/20 transition hover:bg-blue-600"
+                >
+                  保存
                 </button>
               </div>
             </div>

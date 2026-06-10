@@ -556,12 +556,12 @@ describe('custom providers', () => {
     expect(profile.model).toBe(DEFAULT_IMAGES_MODEL)
   })
 
-  it('enables streaming by default and preserves partial image count', () => {
-    expect(createDefaultOpenAIProfile().streamImages).toBe(true)
+  it('disables streaming by default and preserves partial image count', () => {
+    expect(createDefaultOpenAIProfile().streamImages).toBe(false)
     expect(createDefaultOpenAIProfile().streamPartialImages).toBe(1)
-    expect(DEFAULT_SETTINGS.streamImages).toBe(true)
+    expect(DEFAULT_SETTINGS.streamImages).toBe(false)
     expect(DEFAULT_SETTINGS.streamPartialImages).toBe(1)
-    expect(DEFAULT_SETTINGS.profiles[0].streamImages).toBe(true)
+    expect(DEFAULT_SETTINGS.profiles[0].streamImages).toBe(false)
     expect(DEFAULT_SETTINGS.profiles[0].streamPartialImages).toBe(1)
 
     const normalized = normalizeSettings({
@@ -654,7 +654,7 @@ describe('custom providers', () => {
     expect(settings.workbenchResponsesProfileId).toBe('openai-responses-id')
     expect(settings.workbenchImagesProfileId).toBe('image-source')
     expect(settings.workbenchResponsesProfileId).not.toBe(settings.workbenchImagesProfileId)
-    expect(settings.activeProfileId).toBe('openai-responses-id')
+    expect(settings.activeProfileId).toBe('image-source')
     expect(responsesProfile).toMatchObject({
       apiKey: 'sk-source',
       baseUrl: 'https://api.example.com/v1',

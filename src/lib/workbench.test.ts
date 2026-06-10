@@ -98,5 +98,8 @@ describe('buildWorkbenchUserInput', () => {
     expect(ECOMMERCE_IMAGE_SET_SYSTEM_PROMPT).toContain('Step 3 继续：详情页模块')
     expect(ECOMMERCE_IMAGE_SET_SYSTEM_PROMPT).toContain('Step 3 继续：自审评分')
     expect(ECOMMERCE_IMAGE_SET_SYSTEM_PROMPT).toContain('Step 3 继续：输出')
+    expect(ECOMMERCE_IMAGE_SET_SYSTEM_PROMPT).toContain('用户确认补充说明优先决定')
+    expect(ECOMMERCE_IMAGE_SET_SYSTEM_PROMPT).toContain('用户没有明确指定数量')
+    expect(ECOMMERCE_IMAGE_SET_SYSTEM_PROMPT).toContain('prompts 数组只包含本轮需要实际送入画廊生成的图片')
   })
 })

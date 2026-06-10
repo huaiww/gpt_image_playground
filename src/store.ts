@@ -79,7 +79,7 @@ const OPENAI_INTERRUPTED_ERROR = '请求中断'
 const AGENT_STOPPED_MESSAGE = '已停止生成。'
 const AGENT_CONVERSATION_TITLE_MAX_LENGTH = 28
 const ERROR_TOAST_MAX_LENGTH = 80
-const WORKBENCH_MAX_IMAGE_TASKS = 5
+const WORKBENCH_IMAGE_TASK_CONCURRENCY = 5
 type ToastType = 'info' | 'success' | 'error'
 type AgentInputDraft = {
   prompt: string
@@ -1671,6 +1671,17 @@ export function getTaskApiProfile(settings: AppSettings, task: TaskRecord): ApiP
   return null
 }
 
+export function getGalleryImagesProfile(settings: Partial<AppSettings> | unknown): ApiProfile | null {
+  const normalized = normalizeSettings(settings)
+  const imagesProfile = getWorkbenchImagesProfile(normalized)
+  if (!imagesProfile) return null
+
+  const activeProfile = getActiveApiProfile(settings)
+  return activeProfile.id === imagesProfile.id && activeProfile.apiMode === 'images'
+    ? activeProfile
+    : imagesProfile
+}
+
 function createSettingsForApiProfile(settings: AppSettings, profile: ApiProfile): AppSettings {
   const normalized = normalizeSettings(settings)
   return normalizeSettings({
@@ -2106,7 +2117,12 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
     useStore.getState()
 
   const normalizedSettings = normalizeSettings(settings)
-  let activeProfile = getActiveApiProfile(settings)
+  let activeProfile = getGalleryImagesProfile(settings)
+  if (!activeProfile) {
+    showToast('请先完善画廊生图 Images API 配置', 'error')
+    useStore.getState().setShowSettings(true, 'api')
+    return
+  }
   let requestSettings = createSettingsForApiProfile(normalizedSettings, activeProfile)
   if (normalizedSettings.reuseTaskApiProfileTemporarily && (reusedTaskApiProfileId || reusedTaskApiProfileMissing)) {
     const reusedProfile = getReusedTaskApiProfile(normalizedSettings, reusedTaskApiProfileId)
@@ -2313,7 +2329,7 @@ export async function submitWorkbenchEcommerceImageSet(input: WorkbenchEcommerce
   const baseParams = normalizeParamsForSettings(state.params, requestSettings, { hasInputImages: productImages.length > 0 })
   const runId = genId()
   const createdAt = Date.now()
-  const promptItems = plan.prompts.slice(0, WORKBENCH_MAX_IMAGE_TASKS)
+  const promptItems = plan.prompts
   const tasks: TaskRecord[] = promptItems.map((item, index) => {
     const selectedIndexes = item.inputImageIndexes.length ? item.inputImageIndexes : productImages.map((_, imageIndex) => imageIndex)
     const inputImageIds = uniqueIds(
@@ -2352,16 +2368,33 @@ export async function submitWorkbenchEcommerceImageSet(input: WorkbenchEcommerce
   for (const task of tasks) {
     await putTask(task)
   }
-  showToast(`已生成 ${tasks.length} 个画廊任务，开始并发出图`, 'success')
+  showToast(`已生成 ${tasks.length} 个画廊任务，开始最多 ${WORKBENCH_IMAGE_TASK_CONCURRENCY} 张并发出图`, 'success')
 
   void (async () => {
-    await Promise.allSettled(tasks.map((task) => executeTask(task.id)))
+    await executeWorkbenchImageTasks(tasks.map((task) => task.id))
   })()
 
   return {
     plan,
     taskIds: tasks.map((task) => task.id),
   }
+}
+
+async function executeWorkbenchImageTasks(taskIds: string[]) {
+  let nextIndex = 0
+  const workerCount = Math.min(WORKBENCH_IMAGE_TASK_CONCURRENCY, taskIds.length)
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (nextIndex < taskIds.length) {
+      const taskId = taskIds[nextIndex]
+      nextIndex += 1
+      try {
+        await executeTask(taskId)
+      } catch {
+        // executeTask normally records task errors itself; keep the pool moving if an unexpected rejection escapes.
+      }
+    }
+  })
+  await Promise.allSettled(workers)
 }
 
 function getActiveAgentConversation(): AgentConversation {

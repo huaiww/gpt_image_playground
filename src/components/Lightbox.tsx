@@ -608,7 +608,7 @@ function LightboxInner({ src, imageId, maskPreviewSrc, onClose, showNav, current
     <div
       ref={containerRef}
       data-lightbox-root
-      className="fixed inset-0 z-[60] flex items-center justify-center select-none"
+      className="fixed inset-0 z-[120] flex items-center justify-center select-none"
       style={{ cursor: isZoomed ? (isDragging ? 'grabbing' : 'grab') : 'pointer' }}
       onClick={onClick}
       onDoubleClick={onDoubleClick}

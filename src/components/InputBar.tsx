@@ -1,6 +1,6 @@
 import { useRef, useEffect, useCallback, useState, useMemo, useLayoutEffect, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { useStore, submitTask, submitAgentMessage, stopAgentResponse, addImageFromFile, createInputImageFromFile, deleteImageIfUnreferenced, updateTaskInStore, removeMultipleTasks, getCachedImage, ensureImageCached, getActiveAgentRounds } from '../store'
+import { useStore, submitTask, submitAgentMessage, stopAgentResponse, addImageFromFile, createInputImageFromFile, deleteImageIfUnreferenced, updateTaskInStore, removeMultipleTasks, getCachedImage, ensureImageCached, getActiveAgentRounds, getGalleryImagesProfile } from '../store'
 import { DEFAULT_PARAMS } from '../types'
 import { getActiveApiProfile, normalizeSettings } from '../lib/apiProfiles'
 import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, getOutputImageLimitForSettings, normalizeParamsForSettings } from '../lib/paramCompatibility'
@@ -575,11 +575,16 @@ export default function InputBar() {
   const isMobile = useIsMobile()
 
   const currentActiveProfile = useMemo(() => getActiveApiProfile(settings), [settings])
+  const currentSubmitProfile = useMemo(() => (
+    appMode === 'agent'
+      ? currentActiveProfile
+      : getGalleryImagesProfile(settings) ?? currentActiveProfile
+  ), [appMode, currentActiveProfile, settings])
   const activeProfile = useMemo(() => (
     settings.reuseTaskApiProfileTemporarily && reusedTaskApiProfileId
-      ? settings.profiles.find((profile) => profile.id === reusedTaskApiProfileId) ?? currentActiveProfile
-      : currentActiveProfile
-  ), [currentActiveProfile, reusedTaskApiProfileId, settings])
+      ? settings.profiles.find((profile) => profile.id === reusedTaskApiProfileId) ?? currentSubmitProfile
+      : currentSubmitProfile
+  ), [currentSubmitProfile, reusedTaskApiProfileId, settings])
   const activeAgentConversation = appMode === 'agent'
     ? agentConversations.find((conversation) => conversation.id === activeAgentConversationId) ?? null
     : null
@@ -589,7 +594,7 @@ export default function InputBar() {
       ? settings
       : normalizeSettings({ ...settings, activeProfileId: activeProfile.id })
   ), [activeProfile.id, currentActiveProfile.id, settings])
-  const hasSubmitApiConfig = Boolean(activeProfile.apiKey)
+  const hasSubmitApiConfig = Boolean(activeProfile.apiKey) && (appMode === 'agent' || activeProfile.apiMode === 'images')
   const canSubmit = Boolean(prompt.trim() && hasSubmitApiConfig && !activeAgentIsRunning)
   const submitButtonAriaLabel = activeAgentIsRunning
     ? '停止生成'

@@ -375,7 +375,7 @@ export default function DetailModal() {
   return (
     <div
       data-no-drag-select
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      className="fixed inset-0 z-[90] flex items-center justify-center p-4"
       onClick={() => setDetailTaskId(null)}
     >
       <div className="absolute inset-0 bg-black/20 dark:bg-black/40 backdrop-blur-md animate-overlay-in" />

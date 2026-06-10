@@ -1,6 +1,172 @@
 import { useMemo, useRef, useState, useEffect } from 'react'
-import { useStore, reuseConfig, editOutputs, removeTask } from '../store'
+import { createPortal } from 'react-dom'
+import type { TaskRecord } from '../types'
+import { useStore, reuseConfig, editOutputs, removeTask, ensureImageThumbnailCached, subscribeImageThumbnail } from '../store'
+import { buildGalleryItems, type GalleryWorkbenchGroupItem } from '../lib/taskGrouping'
 import TaskCard from './TaskCard'
+
+function getWorkbenchGroupStatus(group: GalleryWorkbenchGroupItem) {
+  if (group.running > 0) return { label: '生成中', className: 'bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-300' }
+  if (group.error > 0) return { label: group.done > 0 ? '部分失败' : '失败', className: 'bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300' }
+  return { label: '已完成', className: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300' }
+}
+
+function useThumbnailSources(imageIds: string[]) {
+  const [sources, setSources] = useState<Record<string, string>>({})
+
+  useEffect(() => {
+    let cancelled = false
+    const unsubscribers: Array<() => void> = []
+    setSources({})
+
+    for (const imageId of imageIds) {
+      const applyThumbnail = (thumbnail: { dataUrl: string }) => {
+        if (cancelled) return
+        setSources((current) => ({ ...current, [imageId]: thumbnail.dataUrl }))
+      }
+      unsubscribers.push(subscribeImageThumbnail(imageId, applyThumbnail))
+      void ensureImageThumbnailCached(imageId).then((thumbnail) => {
+        if (thumbnail) applyThumbnail(thumbnail)
+      }).catch(() => {})
+    }
+
+    return () => {
+      cancelled = true
+      unsubscribers.forEach((unsubscribe) => unsubscribe())
+    }
+  }, [imageIds.join('|')])
+
+  return sources
+}
+
+function WorkbenchGroupCard({ group, onClick }: { group: GalleryWorkbenchGroupItem; onClick: () => void }) {
+  const previewIds = group.previewImageIds.slice(0, 4)
+  const thumbnails = useThumbnailSources(previewIds)
+  const status = getWorkbenchGroupStatus(group)
+  const completedText = `${group.done}/${group.total}`
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="group flex h-40 w-full overflow-hidden rounded-xl border border-blue-200/80 bg-white text-left shadow-sm transition hover:border-blue-300 hover:shadow-lg dark:border-blue-500/20 dark:bg-gray-900 dark:hover:border-blue-400/40"
+    >
+      <div className="grid h-full w-40 min-w-[10rem] grid-cols-2 grid-rows-2 gap-0.5 bg-blue-50 p-1 dark:bg-blue-950/20">
+        {previewIds.length > 0 ? previewIds.map((imageId) => (
+          <div key={imageId} className="overflow-hidden rounded-md bg-white/80 dark:bg-white/[0.04]">
+            {thumbnails[imageId] ? (
+              <img src={thumbnails[imageId]} alt="" className="h-full w-full object-cover transition group-hover:scale-[1.03]" loading="lazy" />
+            ) : (
+              <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">加载</div>
+            )}
+          </div>
+        )) : (
+          <div className="col-span-2 row-span-2 flex flex-col items-center justify-center gap-2 text-blue-400 dark:text-blue-300">
+            <svg className="h-8 w-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4 16l4-4a2 2 0 012.8 0L12 13l2-2a2 2 0 012.8 0L20 14M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+            <span className="text-xs">套图分组</span>
+          </div>
+        )}
+        {Array.from({ length: Math.max(0, 4 - previewIds.length) }).map((_, index) => (
+          <div key={`empty-${index}`} className="rounded-md bg-white/60 dark:bg-white/[0.03]" />
+        ))}
+      </div>
+      <div className="flex min-w-0 flex-1 flex-col p-3">
+        <div className="mb-2 flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold text-gray-900 dark:text-white">工作台套图</div>
+            <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">{group.total} 个任务 · 完成 {completedText}</div>
+          </div>
+          <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs ${status.className}`}>{status.label}</span>
+        </div>
+        <div className="mt-1 min-h-0 flex-1 overflow-hidden text-xs leading-5 text-gray-500 dark:text-gray-400">
+          {group.tasks.slice(0, 4).map((task) => (
+            <div key={task.id} className="truncate">
+              {task.workbenchPromptTitle || '工作台图片'} · {task.status === 'done' ? '已完成' : task.status === 'running' ? '生成中' : '失败'}
+            </div>
+          ))}
+        </div>
+        <div className="mt-auto text-xs font-medium text-blue-600 dark:text-blue-300">查看分组</div>
+      </div>
+    </button>
+  )
+}
+
+function WorkbenchGroupModal({
+  group,
+  selectedTaskIds,
+  isMac,
+  onClose,
+  onOpenTask,
+  onDeleteTask,
+}: {
+  group: GalleryWorkbenchGroupItem
+  selectedTaskIds: string[]
+  isMac: boolean
+  onClose: () => void
+  onOpenTask: (taskId: string) => void
+  onDeleteTask: (task: TaskRecord) => void
+}) {
+  const status = getWorkbenchGroupStatus(group)
+
+  return createPortal(
+    <div data-no-drag-select className="fixed inset-0 z-[80] flex items-center justify-center p-4" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/30 backdrop-blur-sm dark:bg-black/50" />
+      <div
+        className="relative z-10 flex max-h-[88vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl dark:border-white/[0.08] dark:bg-gray-950"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-gray-200 px-5 py-4 dark:border-white/[0.08]">
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="text-base font-semibold text-gray-900 dark:text-white">工作台套图分组</h3>
+              <span className={`rounded-full px-2 py-0.5 text-xs ${status.className}`}>{status.label}</span>
+            </div>
+            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+              {group.total} 个任务 · 已完成 {group.done} · 生成中 {group.running} · 失败 {group.error}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full p-2 text-gray-400 transition hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-white/[0.06] dark:hover:text-gray-200"
+            aria-label="关闭"
+          >
+            <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+        <div className="overflow-auto p-5">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {group.tasks.map((task) => (
+              <div key={task.id} className="task-card-wrapper" data-task-id={task.id}>
+                <TaskCard
+                  task={task}
+                  disableSwipe
+                  isSelected={selectedTaskIds.includes(task.id)}
+                  onClick={(event) => {
+                    const isCtrl = isMac ? ('metaKey' in event && event.metaKey) : ('ctrlKey' in event && event.ctrlKey)
+                    if (isCtrl) {
+                      useStore.getState().toggleTaskSelection(task.id)
+                      return
+                    }
+                    onOpenTask(task.id)
+                  }}
+                  onReuse={() => reuseConfig(task)}
+                  onEditOutputs={() => editOutputs(task)}
+                  onDelete={() => onDeleteTask(task)}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  )
+}
 
 export default function TaskGrid() {
   const tasks = useStore((s) => s.tasks)
@@ -26,6 +192,7 @@ export default function TaskGrid() {
   const startedOnCard = useRef(false)
   const startedWithCtrl = useRef(false)
   const initialSelection = useRef<string[]>([])
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
   const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform)
 
   const filteredTasks = useMemo(() => {
@@ -43,6 +210,12 @@ export default function TaskGrid() {
       return prompt.includes(q) || paramStr.includes(q)
     })
   }, [tasks, searchQuery, filterStatus, filterFavorite])
+
+  const galleryItems = useMemo(() => buildGalleryItems(filteredTasks), [filteredTasks])
+  const selectedGroup = useMemo(
+    () => galleryItems.find((item): item is GalleryWorkbenchGroupItem => item.type === 'workbench-group' && item.id === selectedGroupId) ?? null,
+    [galleryItems, selectedGroupId],
+  )
 
   const handleDelete = (task: typeof tasks[0]) => {
     setConfirmDialog({
@@ -287,32 +460,62 @@ export default function TaskGrid() {
       className="relative min-h-[50vh]"
     >
       <div ref={gridRef} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pb-10">
-        {filteredTasks.map((task) => (
-          <div key={task.id} className="task-card-wrapper" data-task-id={task.id}>
-            <TaskCard
-              task={task}
-              onClick={(e) => {
-                if (Date.now() < suppressClickUntil.current) {
-                  e.preventDefault()
-                  return
-                }
-                suppressClickUntil.current = 0
-                const isCtrl = isMac ? e.metaKey : e.ctrlKey
-                if (isCtrl) {
-                  useStore.getState().toggleTaskSelection(task.id)
-                  return
-                }
+        {galleryItems.map((item) => {
+          if (item.type === 'workbench-group') {
+            return (
+              <div key={item.id} className="task-card-wrapper" data-task-group-id={item.id}>
+                <WorkbenchGroupCard
+                  group={item}
+                  onClick={() => {
+                    if (Date.now() < suppressClickUntil.current) return
+                    suppressClickUntil.current = 0
+                    setSelectedGroupId(item.id)
+                  }}
+                />
+              </div>
+            )
+          }
 
-                setDetailTaskId(task.id)
-              }}
-              onReuse={() => reuseConfig(task)}
-              onEditOutputs={() => editOutputs(task)}
-              onDelete={() => handleDelete(task)}
-              isSelected={selectedTaskIds.includes(task.id)}
-            />
-          </div>
-        ))}
+          const task = item.task
+          return (
+            <div key={task.id} className="task-card-wrapper" data-task-id={task.id}>
+              <TaskCard
+                task={task}
+                onClick={(e) => {
+                  if (Date.now() < suppressClickUntil.current) {
+                    e.preventDefault()
+                    return
+                  }
+                  suppressClickUntil.current = 0
+                  const isCtrl = isMac ? e.metaKey : e.ctrlKey
+                  if (isCtrl) {
+                    useStore.getState().toggleTaskSelection(task.id)
+                    return
+                  }
+
+                  setDetailTaskId(task.id)
+                }}
+                onReuse={() => reuseConfig(task)}
+                onEditOutputs={() => editOutputs(task)}
+                onDelete={() => handleDelete(task)}
+                isSelected={selectedTaskIds.includes(task.id)}
+              />
+            </div>
+          )
+        })}
       </div>
+      {selectedGroup && (
+        <WorkbenchGroupModal
+          group={selectedGroup}
+          selectedTaskIds={selectedTaskIds}
+          isMac={isMac}
+          onClose={() => setSelectedGroupId(null)}
+          onOpenTask={(taskId) => {
+            setDetailTaskId(taskId)
+          }}
+          onDeleteTask={handleDelete}
+        />
+      )}
       {selectionBox && (
         <div
           className="fixed bg-blue-500/20 border border-blue-500/50 pointer-events-none z-[30]"

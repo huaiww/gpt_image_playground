@@ -294,7 +294,7 @@ export function createDefaultOpenAIProfile(overrides: Partial<ApiProfile> = {}):
     apiMode: 'images',
     codexCli: false,
     apiProxy: DEFAULT_OPENAI_API_PROXY,
-    streamImages: true,
+    streamImages: false,
     streamPartialImages: DEFAULT_STREAM_PARTIAL_IMAGES,
     ...overrides,
   }
@@ -467,7 +467,7 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     codexCli: Boolean(record.codexCli),
     apiProxy: typeof record.apiProxy === 'boolean' ? record.apiProxy : DEFAULT_OPENAI_API_PROXY,
     responseFormatB64Json: record.responseFormatB64Json === true ? true : undefined,
-    streamImages: typeof record.streamImages === 'boolean' ? record.streamImages : true,
+    streamImages: typeof record.streamImages === 'boolean' ? record.streamImages : false,
     streamPartialImages: normalizeStreamPartialImages(record.streamPartialImages),
   })
   const profiles = Array.isArray(record.profiles) && record.profiles.length
@@ -575,7 +575,7 @@ export function ensureWorkbenchApiProfiles(
       timeout: sourceProfile.timeout,
       apiMode: 'images',
       apiProxy: sourceProfile.apiProxy,
-      streamImages: true,
+      streamImages: false,
       streamPartialImages: sourceProfile.streamPartialImages,
     })
     profiles.push(imagesProfile)
@@ -584,7 +584,7 @@ export function ensureWorkbenchApiProfiles(
   return normalizeSettings({
     ...normalized,
     profiles,
-    activeProfileId: responsesProfile.id,
+    activeProfileId: normalized.activeProfileId,
     workbenchResponsesProfileId: responsesProfile.id,
     workbenchImagesProfileId: imagesProfile.id,
   })
@@ -703,7 +703,7 @@ function isDefaultOpenAIProfile(profile: ApiProfile): boolean {
     profile.apiMode === 'images' &&
     profile.codexCli === false &&
     profile.apiProxy === DEFAULT_OPENAI_API_PROXY &&
-    profile.streamImages === true &&
+    profile.streamImages === false &&
     profile.streamPartialImages === DEFAULT_STREAM_PARTIAL_IMAGES
 }
 
@@ -859,7 +859,7 @@ export const DEFAULT_SETTINGS: AppSettings = normalizeSettings({
   apiMode: 'images',
   codexCli: false,
   apiProxy: DEFAULT_OPENAI_API_PROXY,
-  streamImages: true,
+  streamImages: false,
   streamPartialImages: DEFAULT_STREAM_PARTIAL_IMAGES,
   customProviders: [],
   clearInputAfterSubmit: false,

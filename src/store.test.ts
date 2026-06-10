@@ -106,7 +106,13 @@ vi.mock('./lib/workbench', () => ({
       { title: '图3', purpose: '差异化', prompt: 'prompt 3', inputImageIndexes: [] },
       { title: '图4', purpose: '场景', prompt: 'prompt 4', inputImageIndexes: [] },
       { title: '图5', purpose: 'CTA', prompt: 'prompt 5', inputImageIndexes: [] },
-      { title: '图6', purpose: '额外', prompt: 'prompt 6', inputImageIndexes: [] },
+      { title: '详情1', purpose: '痛点共鸣', prompt: 'prompt 6', inputImageIndexes: [] },
+      { title: '详情2', purpose: '核心优势', prompt: 'prompt 7', inputImageIndexes: [] },
+      { title: '详情3', purpose: '工艺深度', prompt: 'prompt 8', inputImageIndexes: [] },
+      { title: '详情4', purpose: '使用场景', prompt: 'prompt 9', inputImageIndexes: [] },
+      { title: '详情5', purpose: '品牌信任', prompt: 'prompt 10', inputImageIndexes: [] },
+      { title: '详情6', purpose: '规格参数', prompt: 'prompt 11', inputImageIndexes: [] },
+      { title: '详情7', purpose: '购买引导', prompt: 'prompt 12', inputImageIndexes: [] },
     ],
   })),
   callWorkbenchSellingPointApi: vi.fn(async () => ({
@@ -128,7 +134,7 @@ vi.mock('./lib/workbench', () => ({
     complianceNotes: [],
   })),
 }))
-import { clearAgentConversations, clearImages, getAllAgentConversations, getAllTasks, putAgentConversation, putImage, putTask as putDbTask } from './lib/db'
+import { clearAgentConversations, clearImages, clearTasks as clearDbTasks, getAllAgentConversations, getAllTasks, putAgentConversation, putImage, putTask as putDbTask } from './lib/db'
 import { callImageApi } from './lib/api'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
 import { cleanStaleAgentInputDrafts, deleteAgentRoundFromConversation, editOutputs, getActiveAgentRounds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, markInterruptedOpenAIRunningTasks, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, reuseConfig, submitAgentMessage, submitTask, submitWorkbenchEcommerceImageSet, useStore } from './store'
@@ -241,6 +247,42 @@ describe('mask draft lifecycle in store actions', () => {
     const state = useStore.getState()
     expect(state.tasks).toHaveLength(1)
     expect(state.showToast).toHaveBeenCalledWith('任务已提交', 'success')
+  })
+
+  it('uses the configured gallery Images profile when the active profile is Responses', async () => {
+    const responsesProfile = createDefaultOpenAIProfile({
+      id: 'responses-profile',
+      name: '工作台对话',
+      apiKey: 'responses-key',
+      apiMode: 'responses',
+      model: DEFAULT_RESPONSES_MODEL,
+    })
+    const imagesProfile = createDefaultOpenAIProfile({
+      id: 'images-profile',
+      name: '画廊生图',
+      apiKey: 'images-key',
+      apiMode: 'images',
+      model: 'gpt-image-gallery',
+    })
+    useStore.setState({
+      settings: normalizeSettings({
+        ...DEFAULT_SETTINGS,
+        profiles: [responsesProfile, imagesProfile],
+        activeProfileId: responsesProfile.id,
+        workbenchResponsesProfileId: responsesProfile.id,
+        workbenchImagesProfileId: imagesProfile.id,
+      }),
+    })
+
+    await submitTask()
+
+    const task = useStore.getState().tasks[0]
+    expect(task).toMatchObject({
+      apiProfileId: imagesProfile.id,
+      apiProfileName: '画廊生图',
+      apiMode: 'images',
+      apiModel: 'gpt-image-gallery',
+    })
   })
 
   it('preserves selected image mentions when replacing a mask target with an equivalent image id', () => {
@@ -401,6 +443,15 @@ describe('agent conversation persistence', () => {
     const serializedStoredTasks = JSON.stringify(storedTasks)
     expect(serializedStoredTasks).toContain('image_generation_call')
     expect(serializedStoredTasks).not.toContain('legacy-task-base64')
+  })
+
+  it('loads persisted gallery tasks from IndexedDB during startup', async () => {
+    await clearDbTasks()
+    await putDbTask(task({ id: 'stored-gallery-task', prompt: '历史任务' }))
+
+    await initStore()
+
+    expect(useStore.getState().tasks.map((item) => item.id)).toEqual(['stored-gallery-task'])
   })
 
   it('keeps agent conversations created while initStore is loading', async () => {
@@ -858,7 +909,27 @@ describe('workbench ecommerce image set submission', () => {
     })
   })
 
-  it('creates at most five workbench gallery tasks and starts them concurrently', async () => {
+  it('creates workbench gallery tasks for main and detail prompts with at most five concurrent image requests', async () => {
+    let activeRequests = 0
+    let maxConcurrentRequests = 0
+    const resolveRequests: Array<() => void> = []
+    vi.mocked(callImageApi).mockImplementation(async () => {
+      activeRequests += 1
+      maxConcurrentRequests = Math.max(maxConcurrentRequests, activeRequests)
+      await new Promise<void>((resolve) => {
+        resolveRequests.push(() => {
+          activeRequests -= 1
+          resolve()
+        })
+      })
+      return {
+        images: ['data:image/png;base64,workbench-output'],
+        actualParams: {},
+        actualParamsList: [],
+        revisedPrompts: [],
+      }
+    })
+
     const result = await submitWorkbenchEcommerceImageSet({
       brief: {
         heroCopyDraft: '主图文案',
@@ -890,14 +961,42 @@ describe('workbench ecommerce image set submission', () => {
       },
     })
 
-    expect(result?.taskIds).toHaveLength(5)
-    expect(useStore.getState().tasks).toHaveLength(5)
-    expect(useStore.getState().tasks.map((task) => task.workbenchPromptTitle)).toEqual(['图1', '图2', '图3', '图4', '图5'])
+    expect(result?.taskIds).toHaveLength(12)
+    expect(useStore.getState().tasks).toHaveLength(12)
+    expect(useStore.getState().tasks.map((task) => task.workbenchPromptTitle)).toEqual([
+      '图1',
+      '图2',
+      '图3',
+      '图4',
+      '图5',
+      '详情1',
+      '详情2',
+      '详情3',
+      '详情4',
+      '详情5',
+      '详情6',
+      '详情7',
+    ])
 
     await vi.waitFor(() => {
       expect(vi.mocked(callImageApi)).toHaveBeenCalledTimes(5)
     })
-    expect(useStore.getState().tasks.every((task) => task.status === 'running')).toBe(true)
+    expect(maxConcurrentRequests).toBe(5)
+    expect(useStore.getState().tasks.filter((task) => task.status === 'running')).toHaveLength(12)
+
+    resolveRequests.splice(0, 5).forEach((resolve) => resolve())
+    await vi.waitFor(() => {
+      expect(vi.mocked(callImageApi)).toHaveBeenCalledTimes(10)
+    })
+    expect(maxConcurrentRequests).toBe(5)
+
+    resolveRequests.splice(0, 5).forEach((resolve) => resolve())
+    await vi.waitFor(() => {
+      expect(vi.mocked(callImageApi)).toHaveBeenCalledTimes(12)
+    })
+    expect(maxConcurrentRequests).toBe(5)
+
+    resolveRequests.splice(0).forEach((resolve) => resolve())
 
     await vi.waitFor(() => {
       expect(useStore.getState().tasks.every((task) => task.status === 'done')).toBe(true)
